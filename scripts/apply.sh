@@ -25,9 +25,42 @@ find_claude_binary() {
   return 1
 }
 
+# Find the actual JavaScript bundle file
+find_bundle_file() {
+  local wrapper="$1"
+  
+  # If it's the wrapper script at ~/.claude/local/claude, get the actual bundle
+  if [[ "$wrapper" == "$HOME/.claude/local/claude" ]] && [[ -f "$HOME/.claude/local/node_modules/@anthropic-ai/claude-code/cli.js" ]]; then
+    echo "$HOME/.claude/local/node_modules/@anthropic-ai/claude-code/cli.js"
+    return
+  fi
+  
+  # Check if it's a bash wrapper script that execs another file
+  if file "$wrapper" | grep -q "shell script"; then
+    # Extract the exec path from the wrapper
+    local exec_path=$(grep -E "^exec " "$wrapper" 2>/dev/null | sed 's/^exec "\([^"]*\)".*/\1/')
+    if [[ -n "$exec_path" ]]; then
+      # If exec_path is relative, make it absolute based on wrapper's directory
+      if [[ ! "$exec_path" = /* ]]; then
+        exec_path="$(dirname "$wrapper")/$exec_path"
+      fi
+      # Follow the exec path and check if it's a symlink
+      if [[ -L "$exec_path" ]]; then
+        readlink -f "$exec_path"
+      else
+        echo "$exec_path"
+      fi
+      return
+    fi
+  fi
+  
+  # Otherwise try to resolve symlinks normally
+  readlink -f "$wrapper"
+}
+
 TARGET_DEFAULT=$(find_claude_binary)
 ORIG_SYMLINK="${1:-$TARGET_DEFAULT}"
-REAL_PATH=$(readlink -f "$ORIG_SYMLINK")
+REAL_PATH=$(find_bundle_file "$ORIG_SYMLINK")
 
 USER_BIN="$HOME/.local/bin"
 LINK_PATH="$USER_BIN/free_claude"
@@ -54,13 +87,20 @@ log "Backed up original file to: $BKP"
 BEFORE_SHA="$(shasum -a 256 "$REAL_PATH" | awk '{print $1}')"
 log "Original file SHA256 (before): $BEFORE_SHA"
 
-python3 "$(dirname "$0")/patch.py" "$REAL_PATH"
+# Capture the output from the patch script
+PATCH_OUTPUT=$(python3 "$(dirname "$0")/patch.py" "$REAL_PATH" 2>&1)
+echo "$PATCH_OUTPUT"
 
 AFTER_SHA="$(shasum -a 256 "$REAL_PATH" | awk '{print $1}')"
 log "Original file SHA256 (after):  $AFTER_SHA"
 
 if [ "$BEFORE_SHA" == "$AFTER_SHA" ]; then
-  warn "Patching failed: SHA256 hashes are identical."
+  # Check if patches were already applied
+  if grep -q "already applied" <<< "$PATCH_OUTPUT"; then
+    log "Patches were already applied. No changes needed."
+  else
+    warn "No patches were applied (may not be compatible with this Claude version)."
+  fi
 else
   log "Patching successful: SHA256 hashes are different."
 fi

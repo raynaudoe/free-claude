@@ -28,10 +28,43 @@ log() { printf "[+] %s\n" "$*"; }
 warn() { printf "[!] %s\n" "$*"; }
 err()  { printf "[x] %s\n" "$*" >&2; exit 1; }
 
+# Find the actual JavaScript bundle file
+find_bundle_file() {
+  local wrapper="$1"
+  
+  # If it's the wrapper script at ~/.claude/local/claude, get the actual bundle
+  if [[ "$wrapper" == "$HOME/.claude/local/claude" ]] && [[ -f "$HOME/.claude/local/node_modules/@anthropic-ai/claude-code/cli.js" ]]; then
+    echo "$HOME/.claude/local/node_modules/@anthropic-ai/claude-code/cli.js"
+    return
+  fi
+  
+  # Check if it's a bash wrapper script that execs another file
+  if file "$wrapper" | grep -q "shell script"; then
+    # Extract the exec path from the wrapper
+    local exec_path=$(grep -E "^exec " "$wrapper" 2>/dev/null | sed 's/^exec "\([^"]*\)".*/\1/')
+    if [[ -n "$exec_path" ]]; then
+      # If exec_path is relative, make it absolute based on wrapper's directory
+      if [[ ! "$exec_path" = /* ]]; then
+        exec_path="$(dirname "$wrapper")/$exec_path"
+      fi
+      # Follow the exec path and check if it's a symlink
+      if [[ -L "$exec_path" ]]; then
+        readlink -f "$exec_path"
+      else
+        echo "$exec_path"
+      fi
+      return
+    fi
+  fi
+  
+  # Otherwise try to resolve symlinks normally
+  readlink -f "$wrapper"
+}
+
 # Find Claude installation
 TARGET_DEFAULT=$(find_claude_binary)
 ORIG_SYMLINK="${TARGET_DEFAULT:-claude}"
-REAL_PATH=$(readlink -f "$ORIG_SYMLINK" 2>/dev/null) || err "Could not find Claude installation"
+REAL_PATH=$(find_bundle_file "$ORIG_SYMLINK")
 
 log "Found Claude bundle: $REAL_PATH"
 
