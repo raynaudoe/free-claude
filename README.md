@@ -1,8 +1,10 @@
 # free-claude
 
+<img src="res/msg.png" alt="free-claude message" width="400">
+
 Patches Claude Code to enable nested sub-agent calls - allowing sub-agents to invoke other sub-agents via the Task tool, creating deeper automation chains.
 
-**Note:** Tested on Claude 1.0.81 only.
+**Note:** Tested on Claude Code *1.0.81*.
 
 ## Quick Start
 
