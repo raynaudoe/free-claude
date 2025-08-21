@@ -1,0 +1,9 @@
+{
+  "name": "claude-version-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dummy project to track Claude Code updates via Dependabot",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "1.0.86"
+  }
+}

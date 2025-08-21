@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/monitor"
+    schedule:
+      interval: "daily"
+      time: "00:00"
+    labels:
+      - "claude-update"
+      - "automated"
+    commit-message:
+      prefix: "claude-update"
+    # Only update Claude Code, ignore everything else
+    allow:
+      - dependency-name: "@anthropic-ai/claude-code"
