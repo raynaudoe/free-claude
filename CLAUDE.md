@@ -4,167 +4,167 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Purpose
 
-This repository contains patches for the Claude CLI to re-enable recursive Task tool usage by sub-agents. It modifies the Claude Code bundle to:
-1. Remove the depth limitation on sub-agent Task tool calls (enables unlimited agent recursion)
-2. Add a custom message to the welcome screen ("I had strings, but now I'm free")
+This repository patches Claude Code to enable recursive sub-agent calls, allowing sub-agents to invoke other sub-agents via the Task tool for deeper automation chains.
 
-## Project Structure
+## Updating Patches for New Claude Versions
 
+### When Patches Break
+1. **Monitor System Alerts**: Dependabot PR labeled "patches-broken" indicates incompatibility
+2. **Test Current Patches**: `docker build -t test . && docker run --rm test`
+3. **Identify Changes**: Extract and examine new Claude bundle to find pattern changes
+
+### Finding New Patterns
+```bash
+# Extract Claude bundle for analysis
+cp ~/.claude/local/node_modules/@anthropic-ai/claude-code/cli.js ./cli_new.js
+
+# Search for key patterns that may have changed
+grep -E "W\.name\s*===\s*k7" cli_new.js  # Sub-agent check pattern
+grep -E "toolName.*k7.*push" cli_new.js   # Task tool logic pattern
+grep "Claude Code" cli_new.js             # Welcome message location
+
+# Compare with known patterns
+diff <(grep -o "if.*k7.*return" cli_new.js) <(echo "if(W.name===k7)return!1")
 ```
-├── Makefile              # Build automation
-├── scripts/
-│   ├── patch.py         # Core patching logic (handles minified & non-minified code)
-│   ├── apply.sh         # Main setup script with bundle detection
-│   └── restore.sh       # Restore from backup with bundle detection
-├── res/
-│   └── msg.png          # Welcome message screenshot
-└── README.md            # User documentation
+
+### Updating `scripts/patch.py`
+
+#### Sub-agent Recursion Patch Updates
+Key patterns to update in patch.py:
+- **Lines 15-17**: `pattern_sub_agent_check` - Checks if tool is k7 (Task)
+- **Lines 21-23**: `pattern_sub_agent_logic` - Task tool handling logic
+- **Variable names**: May change (W, J, k7, G, CC/VC) - use regex `[A-Z]{2}` for functions
+
+Common changes in new versions:
+- Variable minification (k7 might become different identifier)
+- Function names (CC/VC might change)
+- Whitespace differences in minified vs non-minified
+
+#### Welcome Message Patch Updates
+- **Line 82**: `original_pattern` - React component structure for welcome text
+- Binary search pattern - must match exact bytes
+
+### Testing Updated Patches
+```bash
+# 1. Backup current working patches
+cp scripts/patch.py scripts/patch.py.bak
+
+# 2. Apply updated patches
+python3 scripts/patch.py ~/.claude/local/node_modules/@anthropic-ai/claude-code/cli.js
+
+# 3. Verify patches applied
+grep -q "globalThis.__TASK_DEPTH__" ~/.claude/local/node_modules/@anthropic-ai/claude-code/cli.js && echo "✓ Sub-agent patch found"
+
+# 4. Test functionality
+docker build -t test . && docker run --rm test
+
+# 5. Restore if failed
+cp scripts/patch.py.bak scripts/patch.py
 ```
 
-## Key Files
+### Pattern Debugging Tips
+- Use `--color=always` with grep to highlight matches
+- Test both minified and non-minified patterns
+- Check for Unicode or encoding issues with `file` and `hexdump`
+- Variable names often follow patterns: single letters for minified, descriptive for non-minified
 
-### `scripts/patch.py`
-Python script that applies two patches to the Claude Code JavaScript bundle:
-- **Sub-agent depth counter patch**: 
-  - Injects `globalThis.__TASK_DEPTH__` counter to track recursion depth
-  - Wraps Task tool's run function to increment/decrement counter
-  - Supports both minified and non-minified code patterns
-  - Idempotent: detects if already applied and skips
-- **Welcome message patch**: 
-  - Inserts custom message after "Claude Code" in welcome screen
-  - Binary pattern matching to preserve exact formatting
-  - Idempotent: detects if already applied and skips
-
-### `scripts/apply.sh`
-Sophisticated bash script that automates the patching process:
-- **Bundle Detection**: 
-  - Identifies wrapper scripts vs actual JavaScript bundles
-  - Follows exec commands in wrapper scripts
-  - Resolves symlinks to find actual `cli.js` file
-- **Safety Features**:
-  - Creates timestamped backups before any modifications
-  - Verifies patches with SHA256 checksums
-  - Reports clear status for each patch (applied/already applied/failed)
-- **Installation**:
-  - Creates `free_claude` command in `~/.local/bin`
-  - Updates PATH in `.zshrc` if needed
-  - Preserves original wrapper script structure
-
-### `scripts/restore.sh`
-Restore script with intelligent file detection:
-- Uses same bundle detection logic as apply.sh
-- Finds most recent backup automatically
-- Confirms restoration with SHA256 verification
-- Supports manual backup file specification
-
-## Development Commands
+## Key Commands
 
 ```bash
-# Apply patches using Makefile
-make patch                        # Auto-detect Claude
-make patch CLAUDE=/path/to/claude # Specify path
+# Primary workflow - apply patches
+make patch                        # Auto-detect Claude installation
+make patch CLAUDE=/path/to/claude # Specify Claude binary path
 
-# Restore from backup
+# Testing and verification
+make help                         # Show available commands
+docker build -t test . -q && docker run --rm test  # Test patches in container
+
+# Restore original Claude
 make restore                      # Use most recent backup
-make restore BACKUP=/path/to/backup.file
+make restore BACKUP=/path/to/file # Use specific backup
 
-# Direct script usage
-./scripts/apply.sh [path-to-claude-binary]
+# Cleanup
+make clean                        # Remove backup files
+
+# Direct script usage (advanced)
+./scripts/apply.sh [claude-path]
 ./scripts/restore.sh [backup-file]
-
-# Manual patch application
-python3 scripts/patch.py <path-to-claude-bundle-file>
-
-# Clean up backup files
-make clean
+python3 scripts/patch.py <bundle-file>
 ```
 
-## Technical Architecture
+## Critical Patterns to Track
 
-### Bundle Resolution Strategy
-The patching system handles complex Claude installations:
+### Sub-agent Task Detection
+The patches work by finding and modifying two critical code sections:
 
-1. **Wrapper Script Detection**:
-   - Identifies bash wrapper scripts (e.g., `~/.claude/local/claude`)
-   - Extracts exec commands to find actual Node.js entry points
-   - Follows symlink chains to locate the real JavaScript bundle
-   - Typical resolution: `claude` → `wrapper.sh` → `node_modules/.bin/claude` → `cli.js`
+1. **Task Tool Check** (`pattern_sub_agent_check` in patch.py:15-17)
+   - Original: `if(W.name===k7)return!1` 
+   - Modified: Adds depth counter check
+   - Variables to watch: `W` (tool object), `k7` (Task tool identifier)
 
-2. **File Locations** (typical local installation):
-   - Wrapper: `~/.claude/local/claude` (73 bytes bash script)
-   - Symlink: `~/.claude/local/node_modules/.bin/claude`
-   - Bundle: `~/.claude/local/node_modules/@anthropic-ai/claude-code/cli.js` (8.7MB)
+2. **Task Tool Handler** (`pattern_sub_agent_logic` in patch.py:21-23)
+   - Original: `let{toolName:J}=CC(W);if(J===k7){G.push(W);continue}`
+   - Modified: Wraps with depth counter increment/decrement
+   - Variables to watch: `J` (toolName), `CC/VC` (helper function), `G` (queue)
 
-### Patch Implementation Details
+### Version Compatibility Matrix
+| Claude Version | Sub-agent Var | Task ID | Helper Func | Status |
+|---------------|---------------|---------|-------------|---------|
+| 1.0.81        | W             | k7      | CC/VC       | ✓ Working |
+| 1.0.86        | W             | k7      | CC/VC       | ✓ Working |
+| Future        | Track changes | Track   | Track       | Update patterns |
 
-#### Sub-agent Recursion Patch
-- **Pattern Detection**: Searches for two critical code patterns:
-  - Check pattern: `if(W.name===k7)return!1` (prevents sub-agent Task usage)
-  - Logic pattern: `let{toolName:J}=CC(W);if(J===k7){G.push(W);continue}`
-- **Modification Strategy**:
-  - Injects depth check: `if(W.name===k7&&(globalThis.__TASK_DEPTH__||0)>=2)return!1`
-  - Wraps Task tool execution with counter increment/decrement
-  - Preserves async behavior and error handling
-- **Minified Code Support**: Handles both formatted and minified JavaScript
+## Architecture Overview
 
-#### Welcome Message Patch
-- **Binary Pattern Matching**: Searches for exact byte sequence
-- **Insertion Point**: After `"Claude Code"),"!"`
-- **Message Format**: `PQ.createElement(T,null," - I had strings, but now I'm free")`
-- **Preservation**: Maintains React element structure
+### Core Components
+- **`scripts/patch.py`**: Pattern-based patcher (handles minified/non-minified)
+- **`scripts/apply.sh`**: Bundle detection and backup automation
+- **`scripts/restore.sh`**: Recovery from timestamped backups
+- **`Makefile`**: User-facing interface
 
-### Idempotency Mechanisms
+### Patch Safety
+- Idempotency: Checks for `globalThis.__TASK_DEPTH__` before applying
+- Backups: Timestamped `.bak.YYYYMMDDHHMMSS` files
+- Verification: SHA256 comparison before/after patching
 
-Both patches include idempotency checks to prevent duplicate application:
+## Continuous Integration
 
-1. **Sub-agent Patch Check**:
-   - Searches for `globalThis.__TASK_DEPTH__` presence
-   - If found, skips patch with "already applied" message
-   - Prevents counter logic duplication
+### Monitoring System (`/monitor/`)
+- **Dependabot**: Tracks `@anthropic-ai/claude-code` updates in `monitor/package.json`
+- **GitHub Action**: Auto-tests patches on version updates via Dockerfile
+- **Workflow**: New version → Dependabot PR → Automated patch testing → Auto-close if working, label "patches-broken" if failed
 
-2. **Welcome Message Check**:
-   - Searches for custom message bytes in bundle
-   - If found, skips patch with "already applied" message
-   - Prevents message concatenation
+### Testing
+- **Dockerfile**: Tests patches in clean Node.js Alpine environment
+- **Verification**: Checks for `globalThis.__TASK_DEPTH__` presence and "ENABLED" status
+- **Manual testing**: `docker build -t test . -q && docker run --rm test`
 
-3. **SHA256 Verification**:
-   - Compares before/after hashes
-   - Identical hashes with "already applied" = success
-   - Identical hashes without "already applied" = compatibility issue
+## Troubleshooting Pattern Updates
 
-### Backup & Recovery System
+### Debugging Failed Patches
+```bash
+# 1. Extract patterns from new Claude version
+node -e "const fs=require('fs'); const content=fs.readFileSync('cli.js','utf8'); console.log(content.match(/if.*k7.*return.*!1/g))"
 
-- **Backup Naming**: `cli.js.bak.YYYYMMDDHHMMSS`
-- **Automatic Backup**: Created before every patch attempt
-- **Recovery Options**:
-  - Auto-detect most recent backup
-  - Manual backup specification
-  - SHA256 verification before and after restore
+# 2. Check variable name changes
+grep -o "[a-zA-Z0-9_]\+\.name===[a-zA-Z0-9_]\+" cli.js | sort -u
 
-## Known Issues & Solutions
+# 3. Find Task tool identifier (may not be k7)
+grep -B2 -A2 '"Task"' cli.js
 
-### Issue: Patches Not Applying
-**Symptoms**: Both patches show "applied: False"
-**Cause**: Claude version incompatibility or already modified bundle
-**Solution**: 
-- Check Claude version (tested with 1.0.81)
-- Restore from backup and retry
-- Verify bundle file location is correct
+# 4. Locate tool handling logic
+grep -E "toolName|push.*continue" cli.js
+```
 
-### Issue: Welcome Message Not Appearing
-**Symptoms**: Patch applies but message doesn't show
-**Cause**: React component structure changed
-**Solution**: Check for Claude updates that may have altered UI structure
+### Common Pattern Evolution
+- **Minification changes**: Whitespace removal, semicolon variations
+- **Variable renames**: k7→k8, W→X, CC→DD (track in compatibility matrix)
+- **Structure changes**: React component updates affect welcome message
+- **Function wrapping**: New build tools may add additional layers
 
-### Issue: Multiple Patch Applications
-**Symptoms**: Running patch multiple times
-**Status**: RESOLVED - Idempotency checks prevent issues
-**Behavior**: Safe to run multiple times, will skip if already applied
+## Environment Requirements
 
-## Important Notes
-
-- **Direct Bundle Modification**: Patches modify the JavaScript bundle in-place
-- **Backup Strategy**: Always creates timestamped backups before modification
-- **Environment Requirements**: Unix-like system with bash and python3
-- **PATH Setup**: Automatically configures `~/.local/bin` in PATH via `.zshrc`
-- **Compatibility**: Tested with Claude Code 1.0.81, may need updates for other versions
+- Unix-like system with bash and python3
+- Claude Code installation (tested with v1.0.81-1.0.86)
+- Docker for automated testing
+- PATH configured to `~/.local/bin`
