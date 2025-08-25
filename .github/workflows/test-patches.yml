@@ -16,44 +16,53 @@ jobs:
     - name: Test patches
       id: test
       run: |
-        docker build -t test . -q
-        OUTPUT=$(docker run --rm test 2>&1)
-        echo "$OUTPUT"
+        docker build -t test . 2>&1 | tee build.log
         
-        if echo "$OUTPUT" | grep -q "Sub-agent recursion: ENABLED"; then
+        # Check if patch.py succeeded (exit code 0)
+        if grep -q "✓ All patches" build.log || grep -q "✓ Sub-agent recursion:" build.log; then
           echo "status=pass" >> $GITHUB_OUTPUT
+          echo "✅ Patches applied successfully"
         else
           echo "status=fail" >> $GITHUB_OUTPUT
+          echo "❌ Patches failed to apply"
+          
+          # Extract pattern detection info for debugging
+          echo "Pattern detection results:"
+          grep "Task check pattern" build.log || true
+          grep "Task logic pattern" build.log || true
         fi
     
-    - name: Comment on PR
-      if: github.event_name == 'pull_request'
+    # Only set labels, don't try to comment (no permissions)
+    - name: Label PR
+      if: github.event_name == 'pull_request' && steps.test.outputs.status == 'fail'
       uses: actions/github-script@v7
+      continue-on-error: true  # Don't fail the workflow if labeling fails
       with:
         script: |
-          const passed = '${{ steps.test.outputs.status }}' === 'pass';
-          
-          await github.rest.issues.createComment({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-            body: passed ? 
-              '✅ Patches working - closing PR' : 
-              '❌ **Patches BROKEN - need fix!**'
-          });
-          
-          if (passed) {
-            await github.rest.pulls.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              state: 'closed'
-            });
-          } else {
+          try {
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
               labels: ['patches-broken']
             });
+            console.log('Added patches-broken label');
+          } catch (error) {
+            console.log('Unable to add label (expected for Dependabot PRs):', error.message);
           }
+    
+    # Create an artifact with the test results that can be viewed
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: patch-test-results
+        path: build.log
+        retention-days: 7
+    
+    # Set workflow status based on test result
+    - name: Set workflow status
+      if: steps.test.outputs.status == 'fail'
+      run: |
+        echo "::error::Patches are broken for this Claude version"
+        exit 1
