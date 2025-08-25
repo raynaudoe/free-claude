@@ -47,15 +47,26 @@ def patch_file(file_path):
     """
 
     sub_agent_patched = False
+    sub_agent_details = []
+    
     if sub_agent_already_patched:
-        print("Sub-agent patch already applied, skipping...")
+        print("✓ Sub-agent patch: Already applied")
         sub_agent_patched = "already applied"
     else:
+        # Check pattern availability
+        check_found = re.search(pattern_sub_agent_check, content) or re.search(pattern_sub_agent_check_min, content)
+        logic_found = re.search(pattern_sub_agent_logic, content) or re.search(pattern_sub_agent_logic_min, content)
+        
+        print("Sub-agent patch patterns:")
+        print(f"  • Task check pattern (W.name===k7): {'✓ FOUND' if check_found else '✗ NOT FOUND'}")
+        print(f"  • Task logic pattern (toolName/push): {'✓ FOUND' if logic_found else '✗ NOT FOUND'}")
+        
         # Try non-minified patterns first
         if re.search(pattern_sub_agent_check, content) and re.search(pattern_sub_agent_logic, content):
             content = re.sub(pattern_sub_agent_check, replacement_check, content)
             content = re.sub(pattern_sub_agent_logic, replacement_logic, content)
             sub_agent_patched = True
+            print("  → Applied: Non-minified patterns")
         # Try minified patterns
         elif re.search(pattern_sub_agent_check_min, content) and re.search(pattern_sub_agent_logic_min, content):
             # For minified version, we need minified replacements
@@ -64,6 +75,9 @@ def patch_file(file_path):
             content = re.sub(pattern_sub_agent_check_min, replacement_check_min, content)
             content = re.sub(pattern_sub_agent_logic_min, replacement_logic_min, content)
             sub_agent_patched = True
+            print("  → Applied: Minified patterns")
+        else:
+            print("  → Failed: Patterns not found or incomplete")
 
     # Write the text-based changes back to file
     with open(file_path, 'w', encoding='utf-8', errors='ignore') as f:
@@ -83,22 +97,49 @@ def patch_file(file_path):
     
     welcome_patched = False
     if welcome_already_patched:
-        print("Welcome message patch already applied, skipping...")
+        print("✓ Welcome message patch: Already applied")
         welcome_patched = "already applied"
     else:
         offset = content_bytes.find(original_pattern)
+        print("Welcome message patch:")
+        print(f"  • Pattern 'Claude Code': {'✓ FOUND' if offset != -1 else '✗ NOT FOUND'}")
+        
         if offset != -1:
             # Insert our custom message right after the original pattern
             insert_position = offset + len(original_pattern)
             content_bytes[insert_position:insert_position] = custom_message
             welcome_patched = True
+            print("  → Applied: Welcome message added")
+        else:
+            print("  → Failed: Pattern not found")
 
     # Write the binary changes back to file
     with open(file_path, 'wb') as f:
         f.write(content_bytes)
 
-    print(f"Sub-agent patch applied: {sub_agent_patched}")
-    print(f"Welcome message patch applied: {welcome_patched}")
+    # Final summary
+    print("\n===== PATCH SUMMARY =====")
+    if sub_agent_patched == "already applied" and welcome_patched == "already applied":
+        print("✓ All patches already applied")
+    elif sub_agent_patched and welcome_patched:
+        print("✓ All patches successfully applied")
+    else:
+        if sub_agent_patched == "already applied" or sub_agent_patched:
+            print(f"✓ Sub-agent recursion: {'Already applied' if sub_agent_patched == 'already applied' else 'SUCCESS'}")
+        else:
+            print("✗ Sub-agent recursion: FAILED")
+        
+        if welcome_patched == "already applied" or welcome_patched:
+            print(f"✓ Welcome message: {'Already applied' if welcome_patched == 'already applied' else 'SUCCESS'}")
+        else:
+            print("✗ Welcome message: FAILED")
+    
+    # Return exit code based on success
+    if (sub_agent_patched or sub_agent_patched == "already applied") and \
+       (welcome_patched or welcome_patched == "already applied"):
+        sys.exit(0)
+    else:
+        sys.exit(1)
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:

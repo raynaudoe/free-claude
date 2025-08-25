@@ -9,8 +9,17 @@ COPY scripts/patch.py /app/patch.py
 RUN npm install -g @anthropic-ai/claude-code@latest && \
     python3 /app/patch.py /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js
 
-# Simple verification
+# Verification with detailed status
 CMD claude --version && \
-    echo "===== Patch Status =====" && \
-    grep -q "globalThis.__TASK_DEPTH__" /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js && \
-    echo "Sub-agent recursion: ENABLED" || echo "Sub-agent recursion: DISABLED"
+    echo "\n===== VERIFICATION =====" && \
+    echo "Checking patches..." && \
+    if grep -q "globalThis.__TASK_DEPTH__" /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js; then \
+        echo "✓ Sub-agent recursion: ENABLED"; \
+    else \
+        echo "✗ Sub-agent recursion: DISABLED"; \
+    fi && \
+    if grep -q "I had strings, but now I'm free" /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js; then \
+        echo "✓ Welcome message: MODIFIED"; \
+    else \
+        echo "✗ Welcome message: ORIGINAL"; \
+    fi
