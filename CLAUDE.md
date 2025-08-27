@@ -132,12 +132,61 @@ The patches work by finding and modifying two critical code sections:
 ### Monitoring System (`/monitor/`)
 - **Dependabot**: Tracks `@anthropic-ai/claude-code` updates in `monitor/package.json`
 - **GitHub Action**: Auto-tests patches on version updates via Dockerfile
-- **Workflow**: New version → Dependabot PR → Automated patch testing → Auto-close if working, label "patches-broken" if failed
+- **Auto-Release**: Creates binary releases when patches pass testing
+- **Workflow**: New version → Dependabot PR → Automated patch testing → Auto-release if working, label "patches-broken" if failed
+
+### Auto-Release Workflow (`.github/workflows/auto-release.yml`)
+
+The new auto-release system creates pre-built patched binaries automatically:
+
+**Trigger**: When Test Patches workflow completes successfully for Dependabot PRs
+**Process**:
+1. Verifies patches passed testing
+2. Extracts Claude Code version from Dependabot PR
+3. Installs specific Claude Code version and applies patches
+4. Creates release package with:
+   - Patched `claude-code-patched.js` binary
+   - Automatic installation script (`install.sh`)
+   - README with version info and instructions
+   - Complete tarball for easy distribution
+5. Creates GitHub release with proper versioning (`vX.Y.Z` matching Claude Code version)
+6. Uploads release assets and generates release notes
+7. Closes Dependabot PR with success comment linking to release
+
+**Release Artifacts**:
+- `free-claude-vX.Y.Z.tar.gz` - Complete package
+- Release notes with installation instructions
+- Automatic version tagging and change tracking
 
 ### Testing
 - **Dockerfile**: Tests patches in clean Node.js Alpine environment
 - **Verification**: Checks for `globalThis.__TASK_DEPTH__` presence and "ENABLED" status
 - **Manual testing**: `docker build -t test . -q && docker run --rm test`
+- **Auto-Release Testing**: Full end-to-end verification with binary packaging before release
+
+### Release Management
+
+**Automatic Release Creation**:
+```bash
+# Testing the auto-release workflow (manual trigger)
+gh workflow run auto-release.yml
+
+# Monitoring release status
+gh release list
+gh release view vX.Y.Z
+
+# Manual release verification
+wget https://github.com/owner/repo/releases/download/vX.Y.Z/free-claude-vX.Y.Z.tar.gz
+tar -xzf free-claude-vX.Y.Z.tar.gz
+./install.sh --dry-run  # Test installation script
+```
+
+**Release Verification Checklist**:
+- ✅ Patched binary includes both sub-agent and welcome message patches
+- ✅ Installation script detects Claude Code paths correctly  
+- ✅ Backup creation works as expected
+- ✅ Release notes include correct version and dependency information
+- ✅ Tarball contains all necessary files (binary, script, README)
 
 ## Troubleshooting Pattern Updates
 

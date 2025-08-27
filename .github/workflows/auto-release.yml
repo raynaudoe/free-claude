@@ -1,0 +1,114 @@
+name: Auto Release Patched Claude Package
+
+on:
+  workflow_run:
+    workflows: ["Test Patches"]
+    types: [completed]
+
+jobs:
+  auto-release:
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      github.event.workflow_run.event == 'pull_request'
+    
+    permissions:
+      contents: write
+      pull-requests: read
+      actions: read
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Download test artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: patch-test-results
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        run-id: ${{ github.event.workflow_run.id }}
+    
+    - name: Verify patches passed
+      run: |
+        if ! grep -q "✓ All patches\|✓ Sub-agent recursion:" build.log; then
+          echo "❌ Patches did not pass - aborting release"
+          exit 1
+        fi
+        echo "✅ Patches verified working"
+    
+    - name: Extract Claude version from PR
+      id: version
+      run: |
+        PR_NUMBER=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}" \
+          | jq -r '.pull_requests[0].number')
+        
+        PR_DATA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER")
+        
+        CLAUDE_VERSION=$(echo "$PR_DATA" | jq -r '.title' | grep -oP '@anthropic-ai/claude-code@\K[0-9]+\.[0-9]+\.[0-9]+' || \
+                        echo "$PR_DATA" | jq -r '.body' | grep -oP '@anthropic-ai/claude-code@\K[0-9]+\.[0-9]+\.[0-9]+')
+        
+        echo "claude_version=$CLAUDE_VERSION" >> $GITHUB_OUTPUT
+        echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    
+    - name: Build npm package
+      run: |
+        ./scripts/build-package.sh ${{ steps.version.outputs.claude_version }} ./dist
+        echo "✅ Package built: ./dist/free-claude-code-${{ steps.version.outputs.claude_version }}.tgz"
+    
+    - name: Create GitHub Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ steps.version.outputs.claude_version }}
+        release_name: Free Claude Code v${{ steps.version.outputs.claude_version }}
+        body: |
+          🎉 **Patched Claude Code v${{ steps.version.outputs.claude_version }}**
+          
+          Complete npm package with sub-agent recursion enabled.
+          
+          **Install:**
+          ```bash
+          npm install -g https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.claude_version }}/free-claude-code-${{ steps.version.outputs.claude_version }}.tgz
+          ```
+          
+          **Rollback:**
+          ```bash
+          npm uninstall -g free-claude-code
+          npm install -g @anthropic-ai/claude-code@${{ steps.version.outputs.claude_version }}
+          ```
+        draft: false
+        prerelease: false
+    
+    - name: Upload package
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./dist/free-claude-code-${{ steps.version.outputs.claude_version }}.tgz
+        asset_name: free-claude-code-${{ steps.version.outputs.claude_version }}.tgz
+        asset_content_type: application/gzip
+    
+    - name: Close Dependabot PR
+      run: |
+        curl -X PATCH \
+          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          "https://api.github.com/repos/${{ github.repository }}/pulls/${{ steps.version.outputs.pr_number }}" \
+          -d '{"state":"closed"}'
+        
+        curl -X POST \
+          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          "https://api.github.com/repos/${{ github.repository }}/issues/${{ steps.version.outputs.pr_number }}/comments" \
+          -d "{\"body\":\"🎉 **Auto-released v${{ steps.version.outputs.claude_version }}** \\n\\n[📦 Download](https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.claude_version }})\"}"
