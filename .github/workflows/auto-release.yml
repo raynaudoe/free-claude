@@ -45,6 +45,8 @@ jobs:
     
     - name: Extract Claude version from PR
       id: version
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         PR_NUMBER=$(gh run view ${{ github.event.workflow_run.id }} --json pullRequests --jq '.pullRequests[0].number')
         
@@ -113,6 +115,8 @@ jobs:
         asset_content_type: application/gzip
     
     - name: Close Dependabot PR or comment on merged PR
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         # Check if PR is already merged (for auto-fixed PRs)
         PR_STATE=$(gh pr view ${{ steps.version.outputs.pr_number }} --json state --jq '.state')

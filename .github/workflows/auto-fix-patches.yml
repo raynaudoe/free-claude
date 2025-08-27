@@ -40,6 +40,8 @@ jobs:
     
     - name: Get PR details
       id: pr-info
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           # Manual trigger mode
@@ -93,6 +95,8 @@ jobs:
     
     - name: Check auto-fix attempt status
       id: check-attempt
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         if [ "${{ steps.pr-info.outputs.mode }}" = "auto_dependabot" ]; then
           # Check if we've already attempted auto-fix for this PR
@@ -124,6 +128,8 @@ jobs:
     
     - name: Label PR and notify start
       if: steps.check-attempt.outputs.should_retry == 'true' && steps.pr-info.outputs.pr_number != ''
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         gh pr edit ${{ steps.pr-info.outputs.pr_number }} --add-label "patches-broken"
         
@@ -169,6 +175,8 @@ jobs:
     
     - name: Commit and push fixes
       if: steps.test-patches.outputs.status == 'success'
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         echo "💾 Committing successful patch fixes..."
         
@@ -204,6 +212,8 @@ jobs:
     
     - name: Handle success - merge PR or create new PR
       if: steps.test-patches.outputs.status == 'success'
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         if [ "${{ steps.pr-info.outputs.mode }}" = "new_branch" ]; then
           # Create new PR for manual trigger
@@ -266,6 +276,8 @@ jobs:
     
     - name: Handle failure case
       if: steps.test-patches.outputs.status == 'failure'
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         echo "❌ Auto-fix failed - patches still broken after Claude's edits"
         
