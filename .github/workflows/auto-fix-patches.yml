@@ -1,0 +1,300 @@
+name: Auto Fix Patches
+
+on:
+  workflow_run:
+    workflows: ["Test Patches"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      claude_version:
+        description: 'Claude Code version to fix patches for (e.g., 1.0.87)'
+        required: true
+        type: string
+      pr_number:
+        description: 'PR number to update (optional - will create new branch if not provided)'
+        required: false
+        type: string
+
+jobs:
+  auto-fix:
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'failure' &&
+        github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+        github.event.workflow_run.event == 'pull_request'
+      )
+    
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Get PR details
+      id: pr-info
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          # Manual trigger mode
+          CLAUDE_VERSION="${{ github.event.inputs.claude_version }}"
+          
+          if [ -n "${{ github.event.inputs.pr_number }}" ]; then
+            # Update existing PR
+            PR_NUMBER="${{ github.event.inputs.pr_number }}"
+            HEAD_REF=$(gh pr view $PR_NUMBER --json headRefName --jq '.headRefName')
+            HEAD_SHA=$(gh pr view $PR_NUMBER --json headRefOid --jq '.headRefOid')
+            MODE="update_pr"
+          else
+            # Create new branch
+            PR_NUMBER=""
+            HEAD_REF="fix/patches-v${CLAUDE_VERSION}"
+            HEAD_SHA=""
+            MODE="new_branch"
+          fi
+          
+          echo "🔧 Manual trigger mode: $MODE"
+        else
+          # Automatic trigger mode  
+          PR_NUMBER=$(gh run view ${{ github.event.workflow_run.id }} --json pullRequests --jq '.pullRequests[0].number')
+          
+          # Extract Claude version from PR title or body
+          PR_TITLE=$(gh pr view $PR_NUMBER --json title --jq '.title')
+          PR_BODY=$(gh pr view $PR_NUMBER --json body --jq '.body')
+          CLAUDE_VERSION=$(echo "$PR_TITLE" | grep -oP '@anthropic-ai/claude-code@\K[0-9]+\.[0-9]+\.[0-9]+' || \
+                          echo "$PR_BODY" | grep -oP '@anthropic-ai/claude-code@\K[0-9]+\.[0-9]+\.[0-9]+')
+          
+          # Get PR head ref for pushing changes
+          HEAD_REF=$(gh pr view $PR_NUMBER --json headRefName --jq '.headRefName')
+          HEAD_SHA=$(gh pr view $PR_NUMBER --json headRefOid --jq '.headRefOid')
+          MODE="auto_dependabot"
+          
+          echo "🤖 Automatic trigger mode"
+        fi
+        
+        echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+        echo "claude_version=$CLAUDE_VERSION" >> $GITHUB_OUTPUT
+        echo "head_ref=$HEAD_REF" >> $GITHUB_OUTPUT
+        echo "head_sha=$HEAD_SHA" >> $GITHUB_OUTPUT
+        echo "mode=$MODE" >> $GITHUB_OUTPUT
+        
+        echo "📋 Configuration:"
+        echo "  Mode: $MODE"
+        echo "  PR Number: $PR_NUMBER"
+        echo "  Claude Version: $CLAUDE_VERSION"
+        echo "  Head Ref: $HEAD_REF"
+        echo "  Head SHA: $HEAD_SHA"
+    
+    - name: Check auto-fix attempt status
+      id: check-attempt
+      run: |
+        if [ "${{ steps.pr-info.outputs.mode }}" = "auto_dependabot" ]; then
+          # Check if we've already attempted auto-fix for this PR
+          EXISTING_LABELS=$(gh pr view ${{ steps.pr-info.outputs.pr_number }} --json labels --jq '.labels[].name' | tr '\n' ' ')
+          
+          if echo "$EXISTING_LABELS" | grep -q "claude-failed"; then
+            echo "❌ Auto-fix already failed for this PR"
+            echo "should_retry=false" >> $GITHUB_OUTPUT
+          elif echo "$EXISTING_LABELS" | grep -q "claude-retry"; then
+            echo "🔄 Manual retry requested"
+            echo "should_retry=true" >> $GITHUB_OUTPUT
+          else
+            echo "🚀 First auto-fix attempt"
+            echo "should_retry=true" >> $GITHUB_OUTPUT
+          fi
+        else
+          # Manual trigger - always proceed
+          echo "🔧 Manual trigger - proceeding with fix"
+          echo "should_retry=true" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Exit if should not retry
+      if: steps.check-attempt.outputs.should_retry == 'false'
+      run: |
+        echo "Skipping auto-fix - conditions not met"
+        exit 0
+    
+
+    
+    - name: Label PR and notify start
+      if: steps.check-attempt.outputs.should_retry == 'true' && steps.pr-info.outputs.pr_number != ''
+      run: |
+        gh pr edit ${{ steps.pr-info.outputs.pr_number }} --add-label "patches-broken"
+        
+        gh pr comment ${{ steps.pr-info.outputs.pr_number }} --body "🤖 **Auto-fix attempting to repair patches**
+
+        Claude v${{ steps.pr-info.outputs.claude_version }} broke our patches. Calling Claude Code Action to fix them automatically...
+
+        🔍 **Status:** Analyzing and updating patterns"
+    
+    - name: Use Claude Code Action to fix patches
+      if: steps.check-attempt.outputs.should_retry == 'true'
+      uses: anthropics/claude-code-action@v1
+      env:
+        ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+        ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+        DISABLE_NON_ESSENTIAL_MODEL_CALLS: 1
+      with:
+        prompt: |
+          Use the claude-patch-updater agent to fix the patches for Claude Code v${{ steps.pr-info.outputs.claude_version }}.
+        anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+    
+    - name: Test updated patches
+      if: steps.check-attempt.outputs.should_retry == 'true'
+      id: test-patches
+      run: |
+        echo "🧪 Testing updated patches..."
+        
+        # Run the same Docker test as test-patches.yml
+        docker build -t test . 2>&1 | tee test_build.log
+        
+        # Check if patches now work
+        if grep -q "✓ All patches\|✓ Sub-agent recursion:" test_build.log; then
+          echo "✅ Patches now work!"
+          echo "status=success" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Patches still broken"
+          echo "status=failure" >> $GITHUB_OUTPUT
+          
+          # Show what went wrong
+          echo "Failure details:"
+          grep -A5 -B5 "Pattern detection results\|Failed\|NOT FOUND" test_build.log || true
+        fi
+    
+    - name: Commit and push fixes
+      if: steps.test-patches.outputs.status == 'success'
+      run: |
+        echo "💾 Committing successful patch fixes..."
+        
+        # Configure git
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        
+        if [ "${{ steps.pr-info.outputs.mode }}" = "new_branch" ]; then
+          # Create new branch for manual trigger
+          echo "🌿 Creating new branch: ${{ steps.pr-info.outputs.head_ref }}"
+          git checkout -b ${{ steps.pr-info.outputs.head_ref }}
+        else
+          # Update existing branch (Dependabot PR or manual with PR number)
+          echo "🔄 Updating existing branch: ${{ steps.pr-info.outputs.head_ref }}"
+          git fetch origin ${{ steps.pr-info.outputs.head_ref }}:${{ steps.pr-info.outputs.head_ref }}
+          git checkout ${{ steps.pr-info.outputs.head_ref }}
+        fi
+        
+        # Add changes (Claude Code Action already made the edits)
+        git add scripts/patch.py
+        git commit -m "fix: auto-update patches for Claude Code v${{ steps.pr-info.outputs.claude_version }}
+        
+        Auto-fixed by Claude Code Action.
+        - Updated pattern recognition for new version
+        - Validated with Docker tests
+        
+        Co-authored-by: claude[bot] <claude@anthropic.com>"
+        
+        # Push changes
+        git push origin ${{ steps.pr-info.outputs.head_ref }}
+        
+        echo "✅ Changes pushed to branch: ${{ steps.pr-info.outputs.head_ref }}"
+    
+    - name: Handle success - merge PR or create new PR
+      if: steps.test-patches.outputs.status == 'success'
+      run: |
+        if [ "${{ steps.pr-info.outputs.mode }}" = "new_branch" ]; then
+          # Create new PR for manual trigger
+          echo "🆕 Creating new PR for fixed patches..."
+          
+          NEW_PR_URL=$(gh pr create \
+            --title "Fix patches for Claude Code v${{ steps.pr-info.outputs.claude_version }}" \
+            --body "🤖 **Auto-generated patch fix**
+
+          ✅ Patches updated for Claude Code v${{ steps.pr-info.outputs.claude_version }}
+          ✅ Docker tests passed
+
+          **Changes made:**
+          - Updated pattern recognition in \`scripts/patch.py\`
+          - Validated compatibility with new version
+
+          **Triggered by:** Manual workflow dispatch" \
+            --head "${{ steps.pr-info.outputs.head_ref }}" \
+            --base "main")
+          
+          NEW_PR_NUMBER=$(echo "$NEW_PR_URL" | grep -oP '/pull/\K\d+')
+          echo "✅ Created PR #$NEW_PR_NUMBER"
+          echo "🔗 PR URL: $NEW_PR_URL"
+          
+        else
+          # Merge existing PR (Dependabot or manual with PR number)
+          echo "🔄 Commenting and merging existing PR..."
+          
+          # Comment on the PR with success
+          gh pr comment ${{ steps.pr-info.outputs.pr_number }} --body "🎉 **Auto-fix successful!**
+
+          ✅ Patches updated for Claude Code v${{ steps.pr-info.outputs.claude_version }}
+          ✅ Docker tests now pass
+          🔄 Merging PR automatically
+
+          **Changes made:**
+          - Updated pattern recognition in \`scripts/patch.py\`
+          - Validated compatibility with new version
+
+          PR will be merged and released automatically."
+          
+          # Wait a moment for the comment to be posted
+          sleep 2
+          
+          # Merge the PR
+          echo "🔀 Merging PR #${{ steps.pr-info.outputs.pr_number }}..."
+          if gh pr merge ${{ steps.pr-info.outputs.pr_number }} --squash --subject "Auto-merge: Fix patches for Claude Code v${{ steps.pr-info.outputs.claude_version }}" --body "Auto-fixed by Claude Code Action and validated by CI."; then
+            echo "✅ PR merged successfully!"
+            
+            # Remove labels (gh will handle this gracefully if labels don't exist)
+            gh pr edit ${{ steps.pr-info.outputs.pr_number }} --remove-label "patches-broken" || true
+            gh pr edit ${{ steps.pr-info.outputs.pr_number }} --remove-label "claude-retry" || true
+            
+            echo "🎉 Auto-fix completed successfully. Release workflow will trigger automatically."
+          else
+            echo "❌ Failed to merge PR"
+            exit 1
+          fi
+        fi
+    
+    - name: Handle failure case
+      if: steps.test-patches.outputs.status == 'failure'
+      run: |
+        echo "❌ Auto-fix failed - patches still broken after Claude's edits"
+        
+        if [ -n "${{ steps.pr-info.outputs.pr_number }}" ]; then
+          # Label PR as claude-failed (for existing PRs)
+          gh pr edit ${{ steps.pr-info.outputs.pr_number }} --add-label "claude-failed"
+          
+          # Remove claude-retry label if it exists
+          gh pr edit ${{ steps.pr-info.outputs.pr_number }} --remove-label "claude-retry" || true
+          
+          # Comment with failure details
+          gh pr comment ${{ steps.pr-info.outputs.pr_number }} --body "🚨 **Auto-fix failed**
+
+          Claude Code Action attempted to fix patches for v${{ steps.pr-info.outputs.claude_version }} but the updated patterns still don't work.
+
+          **Next steps:**
+          - Manual intervention required
+          - Check the [failed workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          - Try adding label \`claude-retry\` for another attempt
+
+          **Failure logs:**
+          \`\`\`
+          $(tail -10 test_build.log)
+          \`\`\`"
+        else
+          # Manual mode without PR - just log the failure
+          echo "🔧 Manual mode: Auto-fix failed for Claude Code v${{ steps.pr-info.outputs.claude_version }}"
+          echo "📋 Check the workflow logs for details: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "💡 Try running manually with different parameters or fix patterns manually"
+        fi
+        
+        exit 1

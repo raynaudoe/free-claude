@@ -10,8 +10,14 @@ jobs:
     runs-on: ubuntu-latest
     if: >
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
-      github.event.workflow_run.event == 'pull_request'
+      github.event.workflow_run.event == 'pull_request' &&
+      (
+        github.event.workflow_run.actor.login == 'dependabot[bot]' ||
+        (
+          github.event.workflow_run.actor.login == 'github-actions[bot]' &&
+          contains(github.event.workflow_run.head_commit.message, 'Auto-fixed by Claude Code Action')
+        )
+      )
     
     permissions:
       contents: write
@@ -40,18 +46,25 @@ jobs:
     - name: Extract Claude version from PR
       id: version
       run: |
-        PR_NUMBER=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}" \
-          | jq -r '.pull_requests[0].number')
+        PR_NUMBER=$(gh run view ${{ github.event.workflow_run.id }} --json pullRequests --jq '.pullRequests[0].number')
         
-        PR_DATA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER")
+        # Verify this is a Dependabot PR (important for auto-fixed PRs)
+        PR_AUTHOR=$(gh pr view $PR_NUMBER --json author --jq '.author.login')
+        if [ "$PR_AUTHOR" != "dependabot[bot]" ]; then
+          echo "❌ Not a Dependabot PR, skipping auto-release"
+          echo "PR author: $PR_AUTHOR"
+          exit 1
+        fi
         
-        CLAUDE_VERSION=$(echo "$PR_DATA" | jq -r '.title' | grep -oP '@anthropic-ai/claude-code@\K[0-9]+\.[0-9]+\.[0-9]+' || \
-                        echo "$PR_DATA" | jq -r '.body' | grep -oP '@anthropic-ai/claude-code@\K[0-9]+\.[0-9]+\.[0-9]+')
+        # Extract Claude version from PR title or body
+        PR_TITLE=$(gh pr view $PR_NUMBER --json title --jq '.title')
+        PR_BODY=$(gh pr view $PR_NUMBER --json body --jq '.body')
+        CLAUDE_VERSION=$(echo "$PR_TITLE" | grep -oP '@anthropic-ai/claude-code@\K[0-9]+\.[0-9]+\.[0-9]+' || \
+                        echo "$PR_BODY" | grep -oP '@anthropic-ai/claude-code@\K[0-9]+\.[0-9]+\.[0-9]+')
         
         echo "claude_version=$CLAUDE_VERSION" >> $GITHUB_OUTPUT
         echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+        echo "✅ Verified Dependabot PR for Claude Code v$CLAUDE_VERSION"
     
     - name: Set up Node.js
       uses: actions/setup-node@v4
@@ -99,16 +112,20 @@ jobs:
         asset_name: free-claude-code-${{ steps.version.outputs.claude_version }}.tgz
         asset_content_type: application/gzip
     
-    - name: Close Dependabot PR
+    - name: Close Dependabot PR or comment on merged PR
       run: |
-        curl -X PATCH \
-          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          -H "Accept: application/vnd.github.v3+json" \
-          "https://api.github.com/repos/${{ github.repository }}/pulls/${{ steps.version.outputs.pr_number }}" \
-          -d '{"state":"closed"}'
+        # Check if PR is already merged (for auto-fixed PRs)
+        PR_STATE=$(gh pr view ${{ steps.version.outputs.pr_number }} --json state --jq '.state')
+        PR_MERGED=$(gh pr view ${{ steps.version.outputs.pr_number }} --json merged --jq '.merged')
         
-        curl -X POST \
-          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          -H "Accept: application/vnd.github.v3+json" \
-          "https://api.github.com/repos/${{ github.repository }}/issues/${{ steps.version.outputs.pr_number }}/comments" \
-          -d "{\"body\":\"🎉 **Auto-released v${{ steps.version.outputs.claude_version }}** \\n\\n[📦 Download](https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.claude_version }})\"}"
+        if [ "$PR_MERGED" = "true" ]; then
+          echo "✅ PR already merged (likely auto-fixed), just commenting"
+        elif [ "$PR_STATE" = "OPEN" ]; then
+          echo "🔄 Closing open Dependabot PR"
+          gh pr close ${{ steps.version.outputs.pr_number }}
+        fi
+        
+        # Always comment with release info
+        gh pr comment ${{ steps.version.outputs.pr_number }} --body "🎉 **Auto-released v${{ steps.version.outputs.claude_version }}**
+
+        [📦 Download](https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.claude_version }})"
