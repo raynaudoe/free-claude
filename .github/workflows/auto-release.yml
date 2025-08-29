@@ -49,11 +49,20 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        PR_NUMBER=$(gh run view ${{ github.event.workflow_run.id }} --json pullRequests --jq '.pullRequests[0].number')
-        
+        # Get workflow run details to find associated PR
+        WORKFLOW_HEAD_BRANCH=$(gh run view ${{ github.event.workflow_run.id }} --json headBranch --jq '.headBranch')
+
+        # Find the PR that matches this branch
+        PR_NUMBER=$(gh pr list --head "$WORKFLOW_HEAD_BRANCH" --json number --jq '.[0].number')
+
+        if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+          echo "❌ Could not find PR for branch: $WORKFLOW_HEAD_BRANCH"
+          exit 1
+        fi
+
         # Verify this is a Dependabot PR (important for auto-fixed PRs)
         PR_AUTHOR=$(gh pr view $PR_NUMBER --json author --jq '.author.login')
-        if [ "$PR_AUTHOR" != "dependabot[bot]" ]; then
+        if [ "$PR_AUTHOR" != "dependabot[bot]" ] && [ "$PR_AUTHOR" != "github-actions[bot]" ]; then
           echo "❌ Not a Dependabot PR, skipping auto-release"
           echo "PR author: $PR_AUTHOR"
           exit 1
@@ -80,40 +89,33 @@ jobs:
         echo "✅ Package built: ./dist/free-claude-code-${{ steps.version.outputs.claude_version }}.tgz"
     
     - name: Create GitHub Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1
       with:
         tag_name: v${{ steps.version.outputs.claude_version }}
-        release_name: Free Claude Code v${{ steps.version.outputs.claude_version }}
+        name: Free Claude Code v${{ steps.version.outputs.claude_version }}
         body: |
           🎉 **Patched Claude Code v${{ steps.version.outputs.claude_version }}**
-          
+
           Complete npm package with sub-agent recursion enabled.
-          
+
           **Install:**
           ```bash
           npm install -g https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.claude_version }}/free-claude-code-${{ steps.version.outputs.claude_version }}.tgz
           ```
-          
+
           **Rollback:**
           ```bash
           npm uninstall -g free-claude-code
           npm install -g @anthropic-ai/claude-code@${{ steps.version.outputs.claude_version }}
           ```
+
+          **Changes:**
+          - ✅ Sub-agent recursion enabled
+          - ✅ Welcome message modified
+          - 🔄 Auto-released from Dependabot PR
+        files: ./dist/free-claude-code-${{ steps.version.outputs.claude_version }}.tgz
         draft: false
         prerelease: false
-    
-    - name: Upload package
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist/free-claude-code-${{ steps.version.outputs.claude_version }}.tgz
-        asset_name: free-claude-code-${{ steps.version.outputs.claude_version }}.tgz
-        asset_content_type: application/gzip
     
     - name: Close Dependabot PR or comment on merged PR
       env:

@@ -64,15 +64,24 @@ jobs:
           
           echo "🔧 Manual trigger mode: $MODE"
         else
-          # Automatic trigger mode  
-          PR_NUMBER=$(gh run view ${{ github.event.workflow_run.id }} --json pullRequests --jq '.pullRequests[0].number')
-          
+          # Automatic trigger mode - get workflow run details first
+          WORKFLOW_HEAD_BRANCH=$(gh run view ${{ github.event.workflow_run.id }} --json headBranch --jq '.headBranch')
+          WORKFLOW_HEAD_SHA=$(gh run view ${{ github.event.workflow_run.id }} --json headSha --jq '.headSha')
+
+          # Find the PR that matches this branch and SHA
+          PR_NUMBER=$(gh pr list --head "$WORKFLOW_HEAD_BRANCH" --json number --jq '.[0].number')
+
+          if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+            echo "❌ Could not find PR for branch: $WORKFLOW_HEAD_BRANCH"
+            exit 1
+          fi
+
           # Extract Claude version from PR title or body
           PR_TITLE=$(gh pr view $PR_NUMBER --json title --jq '.title')
           PR_BODY=$(gh pr view $PR_NUMBER --json body --jq '.body')
           CLAUDE_VERSION=$(echo "$PR_TITLE" | grep -oP '@anthropic-ai/claude-code@\K[0-9]+\.[0-9]+\.[0-9]+' || \
                           echo "$PR_BODY" | grep -oP '@anthropic-ai/claude-code@\K[0-9]+\.[0-9]+\.[0-9]+')
-          
+
           # Get PR head ref for pushing changes
           HEAD_REF=$(gh pr view $PR_NUMBER --json headRefName --jq '.headRefName')
           HEAD_SHA=$(gh pr view $PR_NUMBER --json headRefOid --jq '.headRefOid')
