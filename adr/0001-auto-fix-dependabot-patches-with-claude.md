@@ -7,7 +7,7 @@
 - 2025-08-27
 
 ### Context
-- This repository patches `@anthropic-ai/claude-code` to re-enable recursive sub-agents via `scripts/patch.py` and validates via `Dockerfile` and the "Test Patches" workflow.
+- This repository patches `@anthropic-ai/claude-code` to re-enable recursive sub-agents via `scripts/patch.py` and validates directly in GitHub Actions without Docker.
 - When Dependabot opens a PR for a new `@anthropic-ai/claude-code` version, our current flow runs tests and, on success, triggers `.github/workflows/auto-release.yml` to package and release.
 - When patterns change in new upstream versions, patching can fail (regex misses or structure changes). Today this leaves the PR unmerged and requires manual patch updates.
 
@@ -27,14 +27,14 @@
 
 ### Architecture Overview
 - Components:
-  - `test-patches.yml` (existing): Builds and verifies patches using `Dockerfile`.
+  - `test-patches.yml` (existing): Installs Claude Code and verifies patches directly in GitHub Actions.
   - `auto-release.yml` (updated): Packages and releases when patches pass. Now handles PRs merged by the auto-fix action.
   - `auto-fix-patches.yml` (new): Runs when test patches fail on Dependabot PRs or is manually triggered. It:
     - Collects PR and version metadata using the `gh` CLI
     - Invokes `anthropics/claude-code-action` with a prompt to use the `claude-patch-updater` agent
     - The action directly modifies `scripts/patch.py`
     - Commits changes to the PR branch (or a new branch for manual runs)
-    - Re-runs validation with a local Docker build
+    - Re-runs validation directly in the runner
     - If passing, merges the PR (or creates a new one) and triggers the release workflow
 - **No custom agent runner scripts are needed.** The official Claude Code Action handles all interaction with the Anthropic API.
 
@@ -61,7 +61,7 @@ Dependabot PR opened
 Auto Fix ──get PR/version──▶ gh CLI
 Auto Fix ──prompt──────────▶ Claude Code Action
 Action ───edits file──────▶ scripts/patch.py
-Auto Fix ──test────────────▶ Docker
+Auto Fix ──test────────────▶ Direct runner
 Auto Fix ──commit+merge────▶ gh CLI
 CI ───────release─────────▶ Auto Release workflow
 ```
@@ -74,7 +74,7 @@ CI ───────release─────────▶ Auto Release workf
   - Output contract: The action directly modifies files in the workspace. No JSON parsing is required.
 
 - Validation:
-  - After the action runs, the workflow runs the same Docker-based tests used by `test-patches.yml` to ensure parity.
+  - After the action runs, the workflow runs the same direct tests used by `test-patches.yml` to ensure parity.
 
 - PR Update & Merge:
   - All operations (commenting, labeling, merging, creating PRs) are handled by the `gh` CLI.
@@ -95,10 +95,11 @@ CI ───────release─────────▶ Auto Release workf
 ### Consequences
 - Positive:
   - Faster recovery from upstream changes, fewer manual interventions.
-  - Reuses existing agent prompt and Docker validation for consistency.
+  - Reuses existing agent prompt and direct validation for consistency.
   - **Simplified solution**: No custom scripts to maintain, leveraging an official, well-supported action.
+  - **Faster execution**: No Docker build overhead in CI.
 - Risks/Mitigations:
-  - Incorrect edits: Mitigated with full re-validation via Docker test build.
+  - Incorrect edits: Mitigated with full re-validation via direct test execution.
   - Release coupling: Addressed by relaxing conditions in the release workflow.
 
 ### Implementation Plan (high-level)

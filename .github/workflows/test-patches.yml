@@ -13,23 +13,22 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Test patches
+        - name: Test patches
       id: test
       run: |
-        docker build -t test . 2>&1 | tee build.log
-        
-        # Check if patch.py succeeded (exit code 0)
-        if grep -q "✓ All patches" build.log || grep -q "✓ Sub-agent recursion:" build.log; then
+        echo "🧪 Running patch tests..."
+
+        # Run the test script and capture exit code
+        if ./scripts/test-patches.sh; then
           echo "status=pass" >> $GITHUB_OUTPUT
-          echo "✅ Patches applied successfully"
+          echo "✅ All patch tests passed"
         else
           echo "status=fail" >> $GITHUB_OUTPUT
-          echo "❌ Patches failed to apply"
-          
-          # Extract pattern detection info for debugging
-          echo "Pattern detection results:"
-          grep "Task check pattern" build.log || true
-          grep "Task logic pattern" build.log || true
+          echo "❌ Patch tests failed"
+
+          # Show test output for debugging
+          echo "📋 Test output:"
+          cat patch_output.log 2>/dev/null || echo "No patch log found"
         fi
     
     # Only set labels, don't try to comment (no permissions)

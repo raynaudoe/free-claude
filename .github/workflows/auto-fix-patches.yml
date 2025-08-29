@@ -165,22 +165,24 @@ jobs:
       if: steps.check-attempt.outputs.should_retry == 'true'
       id: test-patches
       run: |
-        echo "🧪 Testing updated patches..."
-        
-        # Run the same Docker test as test-patches.yml
-        docker build -t test . 2>&1 | tee test_build.log
-        
-        # Check if patches now work
-        if grep -q "✓ All patches\|✓ Sub-agent recursion:" test_build.log; then
-          echo "✅ Patches now work!"
+        echo "🧪 Testing updated patches after Claude Code Action..."
+
+        # Extract Claude version for better context
+        CLAUDE_VERSION="${{ steps.pr-info.outputs.claude_version }}"
+        echo "📦 Testing patches for Claude Code v${CLAUDE_VERSION}"
+
+        # Run the test script and capture results
+        if ./scripts/test-patches.sh; then
+          echo "✅ Patches now work after Claude's fixes!"
           echo "status=success" >> $GITHUB_OUTPUT
         else
-          echo "❌ Patches still broken"
+          echo "❌ Patches still broken after Claude's attempt"
+
+          # Show test output for debugging
+          echo "📋 Test output:"
+          cat patch_output.log 2>/dev/null || echo "No patch log found"
+
           echo "status=failure" >> $GITHUB_OUTPUT
-          
-          # Show what went wrong
-          echo "Failure details:"
-          grep -A5 -B5 "Pattern detection results\|Failed\|NOT FOUND" test_build.log || true
         fi
     
     - name: Commit and push fixes
@@ -208,11 +210,11 @@ jobs:
         # Add changes (Claude Code Action already made the edits)
         git add scripts/patch.py
         git commit -m "fix: auto-update patches for Claude Code v${{ steps.pr-info.outputs.claude_version }}
-        
+
         Auto-fixed by Claude Code Action.
         - Updated pattern recognition for new version
-        - Validated with Docker tests
-        
+        - Validated with direct testing
+
         Co-authored-by: claude[bot] <claude@anthropic.com>"
         
         # Push changes
@@ -234,7 +236,7 @@ jobs:
             --body "🤖 **Auto-generated patch fix**
 
           ✅ Patches updated for Claude Code v${{ steps.pr-info.outputs.claude_version }}
-          ✅ Docker tests passed
+          ✅ Direct tests passed
 
           **Changes made:**
           - Updated pattern recognition in \`scripts/patch.py\`
@@ -256,7 +258,7 @@ jobs:
           gh pr comment ${{ steps.pr-info.outputs.pr_number }} --body "🎉 **Auto-fix successful!**
 
           ✅ Patches updated for Claude Code v${{ steps.pr-info.outputs.claude_version }}
-          ✅ Docker tests now pass
+          ✅ Direct tests now pass
           🔄 Merging PR automatically
 
           **Changes made:**

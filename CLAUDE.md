@@ -10,7 +10,7 @@ This repository patches Claude Code to enable recursive sub-agent calls, allowin
 
 ### When Patches Break
 1. **Monitor System Alerts**: Dependabot PR labeled "patches-broken" indicates incompatibility
-2. **Test Current Patches**: `docker build -t test . && docker run --rm test`
+2. **Test Current Patches**: `./scripts/test-patches.sh` or `npm install -g @anthropic-ai/claude-code@latest && python3 scripts/patch.py $(npm root -g)/@anthropic-ai/claude-code/cli.js`
 3. **Identify Changes**: Extract and examine new Claude bundle to find pattern changes
 
 ### Finding New Patterns
@@ -56,7 +56,7 @@ python3 scripts/patch.py ~/.claude/local/node_modules/@anthropic-ai/claude-code/
 grep -q "globalThis.__TASK_DEPTH__" ~/.claude/local/node_modules/@anthropic-ai/claude-code/cli.js && echo "✓ Sub-agent patch found"
 
 # 4. Test functionality
-docker build -t test . && docker run --rm test
+python3 scripts/test-patches.sh
 
 # 5. Restore if failed
 cp scripts/patch.py.bak scripts/patch.py
@@ -77,7 +77,7 @@ make patch CLAUDE=/path/to/claude # Specify Claude binary path
 
 # Testing and verification
 make help                         # Show available commands
-docker build -t test . -q && docker run --rm test  # Test patches in container
+./scripts/test-patches.sh         # Test patches directly
 
 # Restore original Claude
 make restore                      # Use most recent backup
@@ -131,7 +131,7 @@ The patches work by finding and modifying two critical code sections:
 
 ### Monitoring System (`/monitor/`)
 - **Dependabot**: Tracks `@anthropic-ai/claude-code` updates in `monitor/package.json`
-- **GitHub Action**: Auto-tests patches on version updates via Dockerfile
+- **GitHub Action**: Auto-tests patches on version updates via direct execution
 - **Auto-Release**: Creates binary releases when patches pass testing
 - **Workflow**: New version → Dependabot PR → Automated patch testing → Auto-release if working, label "patches-broken" if failed
 
@@ -159,9 +159,9 @@ The new auto-release system creates pre-built patched binaries automatically:
 - Automatic version tagging and change tracking
 
 ### Testing
-- **Dockerfile**: Tests patches in clean Node.js Alpine environment
+- **Direct execution**: Tests patches in GitHub Actions environment
 - **Verification**: Checks for `globalThis.__TASK_DEPTH__` presence and "ENABLED" status
-- **Manual testing**: `docker build -t test . -q && docker run --rm test`
+- **Manual testing**: `./scripts/test-patches.sh` or `npm install -g @anthropic-ai/claude-code@latest && python3 scripts/patch.py $(npm root -g)/@anthropic-ai/claude-code/cli.js`
 - **Auto-Release Testing**: Full end-to-end verification with binary packaging before release
 
 ### Release Management
@@ -215,5 +215,5 @@ grep -E "toolName|push.*continue" cli.js
 
 - Unix-like system with bash and python3
 - Claude Code installation (tested with v1.0.81-1.0.86)
-- Docker for automated testing
+- Node.js and npm for patch testing
 - PATH configured to `~/.local/bin`
