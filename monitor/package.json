@@ -4,6 +4,6 @@
   "private": true,
   "description": "Dummy project to track Claude Code updates via Dependabot",
   "dependencies": {
-    "@anthropic-ai/claude-code": "1.0.86"
+    "@anthropic-ai/claude-code": "1.0.109"
   }
 }
